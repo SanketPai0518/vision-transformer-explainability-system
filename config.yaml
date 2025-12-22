@@ -1,6 +1,6 @@
 data:
   name: cifar10
-  data_dir: data/cifar-10-batches-py
+  data_dir: data
 
   batch_size: 64
   num_workers: 4
