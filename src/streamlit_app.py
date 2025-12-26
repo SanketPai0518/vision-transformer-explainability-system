@@ -72,6 +72,8 @@ st.title("Vision Transformer Explainability System")
 uploaded = st.file_uploader("Upload image", ["jpg","png","jpeg"])
 
 if uploaded:
+    img_bytes = uploaded.getvalue()
+
     image = Image.open(uploaded).convert("RGB")
     st.image(image, caption="Input", use_column_width=True)
 
