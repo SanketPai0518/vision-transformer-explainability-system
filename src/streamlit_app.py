@@ -97,7 +97,8 @@ if uploaded:
     else:
         patch = st.slider("Occlusion patch size", 16, 64, 32) if method=="Occlusion Sensitivity" else 32
         key = img_hash(uploaded.getvalue())
-        heatmap = compute_xai(method, key, tensor, image, pred, patch)
+        heatmap = compute_xai(method, img_bytes, pred, patch)
+
         overlay = overlay_heatmap(image, heatmap)
         st.image(overlay, caption="Explanation Overlay", use_column_width=True)
 
