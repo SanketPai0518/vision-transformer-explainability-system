@@ -1,10 +1,15 @@
 streamlit==1.31.0
+
 torch
 torchvision
+
 timm==1.0.7
 numpy==1.26.4
 pandas==2.1.4
+
 Pillow==10.2.0
 opencv-python-headless==4.9.0.80
 tqdm
-matplotlib==3.8.0
+
+rich==13.7.0
+markdown-it-py==3.0.0
