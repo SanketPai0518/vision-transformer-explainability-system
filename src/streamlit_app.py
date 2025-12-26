@@ -2,23 +2,28 @@ import streamlit as st
 import torch
 import timm
 import numpy as np
-import pandas as pd
-from PIL import Image
 import os
+import csv
+from PIL import Image
 from torchvision import transforms
+from xai.gradcam import GradCAM
+from xai.attention_rollout import attention_rollout
+from xai.patch_importance import patch_importance
+from xai.occlusion import occlusion_sensitivity
 
 # ---------------- config ----------------
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_PATH = "src/best_vit.pt"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "best_vit.pt")
 
 CLASSES = [
     "airplane", "automobile", "bird", "cat", "deer",
     "dog", "frog", "horse", "ship", "truck"
 ]
 
-os.makedirs("feedback_images", exist_ok=True)
-os.makedirs("feedback", exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "feedback_images"), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "feedback"), exist_ok=True)
 
 # ---------------- load model ----------------
 
@@ -45,64 +50,54 @@ transform = transforms.Compose([
 
 # ---------------- UI ----------------
 
-st.title("Vision Transformer Image Classifier")
-st.write("Upload an image and see what the model predicts")
+st.title("Vision Transformer Explainability System")
 
 uploaded_file = st.file_uploader("Upload image", type=["jpg", "png", "jpeg"])
 
-if uploaded_file is not None:
+if uploaded_file:
     image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded image", use_column_width=True)
+    st.image(image, caption="Input Image", use_column_width=True)
 
-    # preprocess
     img_tensor = transform(image).unsqueeze(0).to(DEVICE)
 
     with torch.no_grad():
         logits = model(img_tensor)
         probs = torch.softmax(logits, dim=1)
         pred_idx = probs.argmax(dim=1).item()
-        confidence = probs[0, pred_idx].item()
 
     st.subheader("Prediction")
-    st.write(f"**Class:** {CLASSES[pred_idx]}")
-    st.write(f"**Confidence:** {confidence:.2f}")
+    st.write(f"{CLASSES[pred_idx]} ({probs[0, pred_idx]:.2f})")
 
-    # ---------------- feedback ----------------
-
-    st.divider()
-    st.subheader("Is this prediction correct?")
-
-    correct = st.radio(
-        "Feedback",
-        ["Yes", "No"],
-        horizontal=True
+    method = st.selectbox(
+        "Choose explanation method",
+        [
+            "Grad-CAM",
+            "Attention Rollout",
+            "Patch Importance",
+            "Occlusion Sensitivity",
+            "Top-K Confidence"
+        ]
     )
 
-    if correct == "No":
-        true_label = st.selectbox(
-            "Select correct class",
-            CLASSES
-        )
+    if method == "Grad-CAM":
+        cam = GradCAM(model, model.blocks[-1].norm1)
+        heatmap = cam.generate(img_tensor, pred_idx)
+        st.image(heatmap, caption="Grad-CAM", use_column_width=True)
 
-        if st.button("Submit correction"):
-            img_id = len(os.listdir("feedback_images"))
+    elif method == "Attention Rollout":
+        mask = attention_rollout(model, img_tensor)
+        st.image(mask, caption="Attention Rollout", use_column_width=True)
 
-            img_path = f"feedback_images/{img_id}.png"
-            image.save(img_path)
+    elif method == "Patch Importance":
+        patch_map = patch_importance(model, img_tensor)
+        st.image(patch_map, caption="Patch Importance", use_column_width=True)
 
-            csv_path = "feedback/corrections.csv"
+    elif method == "Occlusion Sensitivity":
+        patch = st.slider("Patch size", 16, 64, 32)
+        occ = occlusion_sensitivity(model, image, transform, patch, DEVICE)
+        st.image(occ, caption="Occlusion Sensitivity", use_column_width=True)
 
-            row = {
-                "image_path": img_path,
-                "label": CLASSES.index(true_label)
-            }
-
-            if os.path.exists(csv_path):
-                df = pd.read_csv(csv_path)
-                df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-            else:
-                df = pd.DataFrame([row])
-
-            df.to_csv(csv_path, index=False)
-
-            st.success("Thank you! Feedback saved.")
+    elif method == "Top-K Confidence":
+        topk = torch.topk(probs[0], k=5)
+        for idx, val in zip(topk.indices, topk.values):
+            st.write(f"{CLASSES[idx]}: {val:.2f}")
