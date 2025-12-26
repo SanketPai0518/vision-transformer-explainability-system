@@ -13,11 +13,11 @@ class GradCAM:
         layer.register_backward_hook(self._backward_hook)
 
     def _forward_hook(self, _, __, output):
-        # output shape: [B, N, D]
+        # output: [B, N, D]
         self.act = output
 
     def _backward_hook(self, _, grad_in, grad_out):
-        # grad_out[0] shape: [B, N, D]
+        # grad_out[0]: [B, N, D]
         self.grad = grad_out[0]
 
     def generate(self, x, class_idx):
@@ -26,17 +26,15 @@ class GradCAM:
         logits[:, class_idx].backward()
 
         # remove CLS token
-        act = self.act[:, 1:, :]      # [B, P, D]
-        grad = self.grad[:, 1:, :]    # [B, P, D]
+        act = self.act[:, 1:, :]     # [B, P, D]
+        grad = self.grad[:, 1:, :]   # [B, P, D]
 
-        # token importance
-        weights = grad.mean(dim=-1)   # [B, P]
+        # token-wise importance
+        weights = grad.mean(dim=-1)  # [B, P]
         cam = (weights.unsqueeze(-1) * act).sum(dim=-1)
+        cam = torch.relu(cam)[0]
 
-        cam = torch.relu(cam)
-        cam = cam[0]
-
-        # reshape patches → grid
+        # reshape tokens -> grid
         size = int(cam.numel() ** 0.5)
         cam = cam.reshape(size, size)
 
