@@ -45,5 +45,3 @@ def train():
             save_checkpoint(model, "best_vit.pt")
             print("saved best model")
 
-if __name__ == "__main__":
-    train()

@@ -1,103 +1,114 @@
 import streamlit as st
 import torch
 import timm
-import numpy as np
 import os
+import hashlib
 import csv
+import imageio
+import numpy as np
 from PIL import Image
 from torchvision import transforms
+
 from xai.gradcam import GradCAM
 from xai.attention_rollout import attention_rollout
 from xai.patch_importance import patch_importance
 from xai.occlusion import occlusion_sensitivity
-
-# ---------------- config ----------------
+from xai.overlay import overlay_heatmap
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "best_vit.pt")
+BASE = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE, "best_vit.pt")
 
 CLASSES = [
-    "airplane", "automobile", "bird", "cat", "deer",
-    "dog", "frog", "horse", "ship", "truck"
+    "airplane","automobile","bird","cat","deer",
+    "dog","frog","horse","ship","truck"
 ]
 
-os.makedirs(os.path.join(BASE_DIR, "feedback_images"), exist_ok=True)
-os.makedirs(os.path.join(BASE_DIR, "feedback"), exist_ok=True)
-
-# ---------------- load model ----------------
+EXPLANATIONS = {
+    "Grad-CAM": "Highlights regions that most influenced the prediction.",
+    "Attention Rollout": "Shows how attention flows across transformer layers.",
+    "Patch Importance": "Displays important image patches.",
+    "Occlusion Sensitivity": "Shows how hiding regions changes confidence.",
+    "Top-K Confidence": "Displays uncertainty across classes."
+}
 
 @st.cache_resource
 def load_model():
-    model = timm.create_model(
-        "vit_tiny_patch16_224",
-        pretrained=False,
-        num_classes=10
-    )
-    model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
-    model.to(DEVICE)
-    model.eval()
-    return model
+    m = timm.create_model("vit_tiny_patch16_224", pretrained=False, num_classes=10)
+    m.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+    m.to(DEVICE).eval()
+    return m
 
 model = load_model()
 
-# ---------------- transforms ----------------
-
 transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((224,224)),
     transforms.ToTensor()
 ])
 
-# ---------------- UI ----------------
+def img_hash(bytes_):
+    return hashlib.md5(bytes_).hexdigest()
+
+@st.cache_data
+def compute_xai(method, key, img_tensor, image, pred_idx, patch):
+    if method == "Grad-CAM":
+        cam = GradCAM(model, model.blocks[-1].norm1)
+        return cam.generate(img_tensor, pred_idx)
+    if method == "Attention Rollout":
+        return attention_rollout(model, img_tensor)
+    if method == "Patch Importance":
+        return patch_importance(model, img_tensor)
+    if method == "Occlusion Sensitivity":
+        return occlusion_sensitivity(model, image, transform, patch, DEVICE)
 
 st.title("Vision Transformer Explainability System")
 
-uploaded_file = st.file_uploader("Upload image", type=["jpg", "png", "jpeg"])
+uploaded = st.file_uploader("Upload image", ["jpg","png","jpeg"])
 
-if uploaded_file:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Input Image", use_column_width=True)
+if uploaded:
+    image = Image.open(uploaded).convert("RGB")
+    st.image(image, caption="Input", use_column_width=True)
 
-    img_tensor = transform(image).unsqueeze(0).to(DEVICE)
-
+    tensor = transform(image).unsqueeze(0).to(DEVICE)
     with torch.no_grad():
-        logits = model(img_tensor)
-        probs = torch.softmax(logits, dim=1)
-        pred_idx = probs.argmax(dim=1).item()
+        logits = model(tensor)
+        probs = torch.softmax(logits, 1)
+        pred = probs.argmax(1).item()
 
     st.subheader("Prediction")
-    st.write(f"{CLASSES[pred_idx]} ({probs[0, pred_idx]:.2f})")
+    st.write(f"{CLASSES[pred]} ({probs[0,pred]:.2f})")
 
     method = st.selectbox(
-        "Choose explanation method",
-        [
-            "Grad-CAM",
-            "Attention Rollout",
-            "Patch Importance",
-            "Occlusion Sensitivity",
-            "Top-K Confidence"
-        ]
+        "Explanation method",
+        ["Grad-CAM","Attention Rollout","Patch Importance","Occlusion Sensitivity","Top-K Confidence"]
     )
 
-    if method == "Grad-CAM":
-        cam = GradCAM(model, model.blocks[-1].norm1)
-        heatmap = cam.generate(img_tensor, pred_idx)
-        st.image(heatmap, caption="Grad-CAM", use_column_width=True)
+    st.info(EXPLANATIONS[method])
 
-    elif method == "Attention Rollout":
-        mask = attention_rollout(model, img_tensor)
-        st.image(mask, caption="Attention Rollout", use_column_width=True)
+    if method == "Top-K Confidence":
+        for i,v in zip(*torch.topk(probs[0],5)):
+            st.write(f"{CLASSES[i]}: {v:.2f}")
+    else:
+        patch = st.slider("Occlusion patch size", 16, 64, 32) if method=="Occlusion Sensitivity" else 32
+        key = img_hash(uploaded.getvalue())
+        heatmap = compute_xai(method, key, tensor, image, pred, patch)
+        overlay = overlay_heatmap(image, heatmap)
+        st.image(overlay, caption="Explanation Overlay", use_column_width=True)
 
-    elif method == "Patch Importance":
-        patch_map = patch_importance(model, img_tensor)
-        st.image(patch_map, caption="Patch Importance", use_column_width=True)
+        if method == "Grad-CAM":
+            cams = []
+            for blk in model.blocks:
+                cam = GradCAM(model, blk.norm1)
+                cams.append(cam.generate(tensor, pred))
+            gif = np.stack([overlay_heatmap(image, c) for c in cams])
+            imageio.mimsave("gradcam_layers.gif", gif, duration=0.4)
+            st.image("gradcam_layers.gif", caption="Grad-CAM Across Layers")
 
-    elif method == "Occlusion Sensitivity":
-        patch = st.slider("Patch size", 16, 64, 32)
-        occ = occlusion_sensitivity(model, image, transform, patch, DEVICE)
-        st.image(occ, caption="Occlusion Sensitivity", use_column_width=True)
-
-    elif method == "Top-K Confidence":
-        topk = torch.topk(probs[0], k=5)
-        for idx, val in zip(topk.indices, topk.values):
-            st.write(f"{CLASSES[idx]}: {val:.2f}")
+        if st.button("Download Explanation Report"):
+            import io, zipfile
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w") as z:
+                z.writestr("prediction.txt", f"{CLASSES[pred]} {probs[0,pred]:.2f}")
+                Image.fromarray(overlay).save("overlay.png")
+                z.write("overlay.png")
+            st.download_button("Download ZIP", buf.getvalue(), "xai_report.zip")
