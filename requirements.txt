@@ -8,4 +8,4 @@ numpy
 Pillow
 opencv-python-headless
 tqdm
-imageio
+

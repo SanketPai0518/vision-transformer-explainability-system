@@ -4,7 +4,6 @@ import timm
 import os
 import hashlib
 import csv
-import imageio
 import numpy as np
 from PIL import Image
 from torchvision import transforms
@@ -96,13 +95,26 @@ if uploaded:
         st.image(overlay, caption="Explanation Overlay", use_column_width=True)
 
         if method == "Grad-CAM":
-            cams = []
-            for blk in model.blocks:
-                cam = GradCAM(model, blk.norm1)
-                cams.append(cam.generate(tensor, pred))
-            gif = np.stack([overlay_heatmap(image, c) for c in cams])
-            imageio.mimsave("gradcam_layers.gif", gif, duration=0.4)
-            st.image("gradcam_layers.gif", caption="Grad-CAM Across Layers")
+            from PIL import Image
+
+        cams = []
+        for blk in model.blocks:
+            cam = GradCAM(model, blk.norm1)
+            cams.append(cam.generate(tensor, pred))
+
+        frames = [Image.fromarray(overlay_heatmap(image, c)) for c in cams]
+
+        gif_path = os.path.join(BASE, "gradcam_layers.gif")
+        frames[0].save(
+            gif_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=400,   # ms per frame
+            loop=0
+        )
+
+        st.image(gif_path, caption="Grad-CAM Across Layers")
+
 
         if st.button("Download Explanation Report"):
             import io, zipfile
