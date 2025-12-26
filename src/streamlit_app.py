@@ -10,7 +10,7 @@ from torchvision import transforms
 # ---------------- config ----------------
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-MODEL_PATH = "best_vit.pt"
+MODEL_PATH = "src/best_vit.pt"
 
 CLASSES = [
     "airplane", "automobile", "bird", "cat", "deer",
