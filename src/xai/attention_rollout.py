@@ -3,37 +3,37 @@ import numpy as np
 import cv2
 
 def attention_rollout(model, x):
-    attn_maps = []
+    model.eval()
+    B = x.size(0)
 
-    def hook(module, input, output):
-        # output shape: [B, heads, N, N]
-        attn_maps.append(output.detach())
-
-    hooks = []
-    for blk in model.blocks:
-        hooks.append(blk.attn.attn_drop.register_forward_hook(hook))
-
+    # forward once to build features
     with torch.no_grad():
         _ = model(x)
 
-    for h in hooks:
-        h.remove()
+    rollout = None
 
-    if len(attn_maps) == 0:
-        raise RuntimeError("No attention maps captured. Check hook placement.")
+    for blk in model.blocks:
+        attn = blk.attn
 
-    # Average heads
-    attn_maps = [a.mean(dim=1) for a in attn_maps]  # [B, N, N]
+        # --- extract qkv manually ---
+        qkv = attn.qkv(attn.norm(x) if hasattr(attn, "norm") else x)
+        qkv = qkv.reshape(B, -1, 3, attn.num_heads, attn.head_dim)
+        qkv = qkv.permute(2, 0, 3, 1, 4)
 
-    # Add identity and normalize
-    rollout = torch.eye(attn_maps[0].size(-1), device=x.device)
+        q, k, _ = qkv[0], qkv[1], qkv[2]
 
-    for attn in attn_maps:
-        attn = attn + torch.eye(attn.size(-1), device=x.device)
-        attn = attn / attn.sum(dim=-1, keepdim=True)
-        rollout = attn @ rollout
+        attn_map = (q @ k.transpose(-2, -1)) * attn.scale
+        attn_map = attn_map.softmax(dim=-1)
 
-    # CLS token → patch tokens
+        # average heads
+        attn_map = attn_map.mean(dim=1)
+
+        if rollout is None:
+            rollout = attn_map
+        else:
+            rollout = attn_map @ rollout
+
+    # CLS → patch tokens
     mask = rollout[0, 0, 1:]
 
     size = int(mask.numel() ** 0.5)
