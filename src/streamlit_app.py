@@ -49,14 +49,21 @@ def img_hash(bytes_):
     return hashlib.md5(bytes_).hexdigest()
 
 @st.cache_data
-def compute_xai(method, key, img_tensor, image, pred_idx, patch):
+
+def compute_xai(method, img_bytes, pred, patch):
+    image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    img_tensor = transform(image).unsqueeze(0).to(DEVICE)
+
     if method == "Grad-CAM":
         cam = GradCAM(model, model.blocks[-1].norm1)
-        return cam.generate(img_tensor, pred_idx)
+        return cam.generate(img_tensor, pred)
+
     if method == "Attention Rollout":
         return attention_rollout(model, img_tensor)
+
     if method == "Patch Importance":
         return patch_importance(model, img_tensor)
+
     if method == "Occlusion Sensitivity":
         return occlusion_sensitivity(model, image, transform, patch, DEVICE)
 
