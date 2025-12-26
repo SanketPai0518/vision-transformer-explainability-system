@@ -96,8 +96,12 @@ if uploaded:
     st.info(EXPLANATIONS[method])
 
     if method == "Top-K Confidence":
-        for i,v in zip(*torch.topk(probs[0],5)):
-            st.write(f"{CLASSES[i]}: {v:.2f}")
+        st.subheader("Top-5 Predictions")
+
+        topk_vals, topk_idxs = torch.topk(probs[0], k=5)
+
+        for idx, val in zip(topk_idxs.tolist(), topk_vals.tolist()):
+            st.write(f"{CLASSES[idx]}: {val:.2f}")
     else:
         patch = st.slider("Occlusion patch size", 16, 64, 32) if method=="Occlusion Sensitivity" else 32
         key = img_hash(uploaded.getvalue())

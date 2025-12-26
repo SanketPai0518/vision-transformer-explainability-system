@@ -1,26 +1,26 @@
 import torch
 import numpy as np
+import cv2
 
-def patch_importance(model, x):
-    attns = []
+def patch_importance(model, img_tensor):
+    model.eval()
+    img_tensor.requires_grad_(True)
 
-    def hook(m, i, o):
-        attns.append(o)
+    logits = model(img_tensor)
+    pred = logits.argmax(dim=1)
 
-    hooks = []
-    for blk in model.blocks:
-        hooks.append(blk.attn.attn_drop.register_forward_hook(hook))
+    logits[:, pred].backward()
 
-    _ = model(x)
+    # get patch embeddings
+    patches = model.patch_embed(img_tensor)   # [B, P, D]
+    grads = img_tensor.grad
 
-    for h in hooks:
-        h.remove()
+    # project gradient importance to patches
+    grads = grads.abs().mean(dim=1)  # [B, H, W]
+    cam = grads[0]
 
-    attn = torch.stack(attns).mean(0).mean(1)
-    scores = attn[0, 1:].mean(0)
+    cam = cam.detach().cpu().numpy()
+    cam = cv2.resize(cam, (224, 224))
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
 
-    size = int(scores.numel() ** 0.5)
-    scores = scores.reshape(size, size)
-    scores = scores.detach().cpu().numpy()
-    scores = (scores - scores.min()) / (scores.max() - scores.min() + 1e-8)
-    return scores
+    return cam
